@@ -14,7 +14,8 @@ const videos = {
   6: '/vids/vid6.mp4'
 };
 
-const defaultImage = '/vids/img01.jpg';
+const defaultVideo = '/vids/default.mp4';
+const videoSources = [defaultVideo, ...Object.values(videos)];
 const defaultPort = 'COM7';
 const defaultBaudRate = '115200';
 const serialPortStorageKey = 'esp32SerialPort';
@@ -22,10 +23,11 @@ const serialBaudStorageKey = 'esp32SerialBaudRate';
 
 function App() {
   const videoRef = useRef(null);
+  const videoCacheRef = useRef({});
   const restoredSettingsRef = useRef(false);
   const [latestValue, setLatestValue] = useState('--');
   const [activeVideo, setActiveVideo] = useState(null);
-  const [defaultScreenKey, setDefaultScreenKey] = useState(() => `default-${Date.now()}`);
+  const [preloadComplete, setPreloadComplete] = useState(false);
   const [connected, setConnected] = useState(false);
   const [serialStatus, setSerialStatus] = useState({ state: 'starting', port: null });
   const [isMuted, setIsMuted] = useState(true);
@@ -39,6 +41,48 @@ function App() {
     () => localStorage.getItem(serialBaudStorageKey) || defaultBaudRate
   );
   const [connectMessage, setConnectMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const objectUrls = [];
+
+    async function preloadVideos() {
+      const entries = await Promise.all(
+        videoSources.map(async (source) => {
+          try {
+            const response = await fetch(source);
+
+            if (!response.ok) {
+              throw new Error(`Unable to preload ${source}`);
+            }
+
+            const blob = await response.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            objectUrls.push(objectUrl);
+            return [source, objectUrl];
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      if (cancelled) {
+        objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
+        return;
+      }
+
+      videoCacheRef.current = Object.fromEntries(entries.filter(Boolean));
+      setPreloadComplete(true);
+    }
+
+    preloadVideos();
+
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((objectUrl) => URL.revokeObjectURL(objectUrl));
+      videoCacheRef.current = {};
+    };
+  }, []);
 
   useEffect(() => {
     const socket = io(socketUrl, {
@@ -57,9 +101,11 @@ function App() {
       setLatestValue(nextValue);
 
       if (Object.hasOwn(videos, nextValue)) {
+        const source = videos[nextValue];
+
         setActiveVideo({
           value: nextValue,
-          source: videos[nextValue],
+          source: videoCacheRef.current[source] || source,
           key: `${nextValue}-${Date.now()}`
         });
       }
@@ -103,10 +149,14 @@ function App() {
     restoreSettings();
   }, []);
 
+  const visibleVideoSource =
+    activeVideo?.source || videoCacheRef.current[defaultVideo] || defaultVideo;
+  const visibleVideoKey = activeVideo?.key || `default-${preloadComplete ? 'ready' : 'loading'}`;
+
   useEffect(() => {
     const video = videoRef.current;
 
-    if (!video || !activeVideo?.source) {
+    if (!video) {
       return;
     }
 
@@ -118,7 +168,7 @@ function App() {
         .then(() => setNeedsStart(false))
         .catch(() => setNeedsStart(true));
     }
-  }, [activeVideo?.key, activeVideo?.source]);
+  }, [visibleVideoKey, visibleVideoSource]);
 
   function startPlayback() {
     const video = videoRef.current;
@@ -193,7 +243,6 @@ function App() {
 
   function handleVideoEnded() {
     setActiveVideo(null);
-    setDefaultScreenKey(`default-${Date.now()}`);
     setNeedsStart(false);
   }
 
@@ -207,34 +256,25 @@ function App() {
       ].filter(Boolean)
     )
   );
-
   return (
     <main className="screen">
       <section className="player" aria-label="Video player">
-        {activeVideo ? (
-          <video
-            key={activeVideo.key}
-            ref={videoRef}
-            className="video animate__animated animate__slideInLeft"
-            muted={isMuted}
-            playsInline
-            preload="auto"
-            autoPlay
-            controls={false}
-            controlsList="nodownload noplaybackrate noremoteplayback"
-            disablePictureInPicture
-            onEnded={handleVideoEnded}
-          >
-            <source src={activeVideo.source} type="video/mp4" />
-          </video>
-        ) : (
-          <img
-            key={defaultScreenKey}
-            className="default-image animate__animated animate__slideInLeft"
-            src={defaultImage}
-            alt=""
-          />
-        )}
+        <video
+          key={visibleVideoKey}
+          ref={videoRef}
+          className="video animate__animated animate__slideInLeft"
+          muted={isMuted}
+          playsInline
+          preload="auto"
+          autoPlay
+          loop={!activeVideo}
+          controls={false}
+          controlsList="nodownload noplaybackrate noremoteplayback"
+          disablePictureInPicture
+          onEnded={activeVideo ? handleVideoEnded : undefined}
+        >
+          <source src={visibleVideoSource} type="video/mp4" />
+        </video>
 
         {needsStart && (
           <button className="start-button" type="button" onClick={startPlayback}>
