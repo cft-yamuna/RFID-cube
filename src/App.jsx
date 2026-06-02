@@ -30,7 +30,7 @@ function App() {
   const [preloadComplete, setPreloadComplete] = useState(false);
   const [connected, setConnected] = useState(false);
   const [serialStatus, setSerialStatus] = useState({ state: 'starting', port: null });
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
   const [needsStart, setNeedsStart] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ports, setPorts] = useState([]);
@@ -177,6 +177,8 @@ function App() {
       return;
     }
 
+    video.muted = false;
+    setIsMuted(false);
     video
       .play()
       .then(() => setNeedsStart(false))
